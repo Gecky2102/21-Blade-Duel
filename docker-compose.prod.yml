@@ -1,0 +1,44 @@
+version: '3.8'
+services:
+  blade-duel-frontend:
+    image: blade-duel:frontend
+    ports:
+      - "3000:3000"
+    environment:
+      REACT_APP_API_URL: http://localhost:5000
+      REACT_APP_WS_URL: ws://localhost:5000
+    depends_on:
+      - blade-duel-backend
+
+  blade-duel-backend:
+    image: blade-duel:backend
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://bladeduel:bladeduel123@postgres:5432/bladeduel_db
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change_this_in_production}
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bladeduel
+      POSTGRES_PASSWORD: bladeduel123
+      POSTGRES_DB: bladeduel_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:
