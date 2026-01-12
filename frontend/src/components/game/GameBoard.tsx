@@ -26,7 +26,22 @@ export default function GameBoard() {
   const { gameState } = useSelector((state: RootState) => state.game);
   const { token } = useSelector((state: RootState) => state.auth);
   const [lastAction, setLastAction] = useState<string | null>(null);
+  const [turnSeconds, setTurnSeconds] = useState<number | null>(null);
   const socket = getSocket();
+
+  useEffect(() => {
+    if (!gameState?.turnDeadline) {
+      setTurnSeconds(null);
+      return;
+    }
+    const tick = () => {
+      const ms = gameState.turnDeadline - Date.now();
+      setTurnSeconds(Math.max(0, Math.ceil(ms / 1000)));
+    };
+    tick();
+    const id = setInterval(tick, 500);
+    return () => clearInterval(id);
+  }, [gameState?.turnDeadline]);
 
   if (!gameState) {
     return (
@@ -42,21 +57,6 @@ export default function GameBoard() {
   const oppDanger = Math.min(opponentTotal, 21) / 21;
   const sawOffset = (yourDanger - oppDanger) * 140; // starts center, drifts toward danger
   const bladeHint = sawOffset > 12 ? 'The blade is drifting to you.' : sawOffset < -12 ? 'The blade favors your foe.' : 'The blade waits.';
-  const [turnSeconds, setTurnSeconds] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!gameState.turnDeadline) {
-      setTurnSeconds(null);
-      return;
-    }
-    const tick = () => {
-      const ms = gameState.turnDeadline! - Date.now();
-      setTurnSeconds(Math.max(0, Math.ceil(ms / 1000)));
-    };
-    tick();
-    const id = setInterval(tick, 500);
-    return () => clearInterval(id);
-  }, [gameState.turnDeadline]);
 
   const formatCard = (value: number, idx: number) => {
     const suit = SUITS[idx % SUITS.length];
