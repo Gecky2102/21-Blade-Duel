@@ -23,11 +23,33 @@ const SPECIAL_CARD_INFO: Record<string, string> = {
 const SUITS = ['♠', '♥', '♦', '♣'];
 
 export default function GameBoard() {
-  const { gameState } = useSelector((state: RootState) => state.game);
-  const { token } = useSelector((state: RootState) => state.auth);
+  const { gameState, result } = useSelector((state: RootState) => state.game);
+  const { token, player } = useSelector((state: RootState) => state.auth);
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [turnSeconds, setTurnSeconds] = useState<number | null>(null);
   const socket = getSocket();
+
+  const calculateSawOffset = () => {
+    if (!gameState) return 0;
+    const yourTotal = gameState.yourTotal;
+    const oppTotal = gameState.opponentTotal ?? gameState.opponentVisibleCard ?? 0;
+    const roundNum = gameState.currentTurn === 'you' ? gameState.turnCount : gameState.turnCount + 1;
+
+    // Step-based movement: round 1 = 2px, round 2 = 4px, round 3+ = 8px per move
+    let stepSize = 2;
+    if (roundNum >= 2) stepSize = 4;
+    if (roundNum >= 3) stepSize = 8;
+
+    // Direction: towards the player with higher total (losing position)
+    const direction = yourTotal > oppTotal ? 1 : yourTotal < oppTotal ? -1 : 0;
+    return direction * (stepSize * Math.floor(roundNum / 2));
+  };
+
+  const getBladeOutcome = () => {
+    if (sawOffset > 12) return { text: '⚠️ YOU LOSE', color: '#ef4444', desc: 'Blade closing on you' };
+    if (sawOffset < -12) return { text: '✓ YOU WIN', color: '#22c55e', desc: 'Blade closing on opponent' };
+    return { text: '⚖️ NEUTRAL', color: '#9ca3af', desc: 'Blade in center' };
+  };
 
   useEffect(() => {
     if (!gameState?.turnDeadline) {
@@ -51,12 +73,89 @@ export default function GameBoard() {
     );
   }
 
+  if (gameState.gamePhase === 'result' && result) {
+    const isWinner = result.winnerId === player?.id;
+    return (
+      <div className="min-h-screen relative overflow-hidden px-4 py-8 flex items-center justify-center">
+        <div className="absolute inset-0 pointer-events-none opacity-50" style={{ background: 'radial-gradient(circle at 30% 10%, rgba(208,22,42,0.12), transparent 32%)' }} />
+        <div className="absolute inset-0 pointer-events-none" style={{ background: 'linear-gradient(135deg, rgba(208,22,42,0.1) 0%, transparent 40%, rgba(208,22,42,0.08) 90%)' }} />
+        
+        <motion.div
+          initial={{ scale: 0, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: 'spring', stiffness: 100, damping: 20 }}
+          className="relative z-10 text-center space-y-8 max-w-2xl"
+        >
+          {isWinner ? (
+            <>
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ repeat: Infinity, duration: 3, ease: 'linear' }}
+                className="text-9xl"
+              >
+                🪚
+              </motion.div>
+              <h1 className="text-6xl font-bold hero-title text-red-400">VICTORY</h1>
+              <p className="text-2xl text-gray-300">Your blade found its mark.</p>
+              <div className="glass-panel rounded-xl p-6 space-y-3">
+                <div className="flex justify-between text-lg">
+                  <span className="text-gray-400">Your hand:</span>
+                  <span className="font-bold text-green-400">{result.winnerTotal}</span>
+                </div>
+                <div className="flex justify-between text-lg">
+                  <span className="text-gray-400">Opponent:</span>
+                  <span className="font-bold text-red-400">{result.loserTotal}</span>
+                </div>
+                <div className="flex justify-between text-lg">
+                  <span className="text-gray-400">Duration:</span>
+                  <span className="font-bold text-gray-300">{result.durationSeconds}s</span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <motion.div
+                animate={{ y: [0, -20, 0] }}
+                transition={{ repeat: Infinity, duration: 2 }}
+                className="text-9xl"
+              >
+                ⚔️
+              </motion.div>
+              <h1 className="text-6xl font-bold hero-title text-red-600">DEFEAT</h1>
+              <p className="text-2xl text-gray-300">The blade turns against you.</p>
+              <div className="glass-panel rounded-xl p-6 space-y-3">
+                <div className="flex justify-between text-lg">
+                  <span className="text-gray-400">Your hand:</span>
+                  <span className="font-bold text-red-400">{result.loserTotal}</span>
+                </div>
+                <div className="flex justify-between text-lg">
+                  <span className="text-gray-400">{result.winnerUsername}:</span>
+                  <span className="font-bold text-green-400">{result.winnerTotal}</span>
+                </div>
+                <div className="flex justify-between text-lg">
+                  <span className="text-gray-400">Duration:</span>
+                  <span className="font-bold text-gray-300">{result.durationSeconds}s</span>
+                </div>
+              </div>
+            </>
+          )}
+          <motion.button
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={() => window.location.reload()}
+            className="button-blood px-8 py-4 rounded-lg text-lg font-semibold mt-8"
+          >
+            Return to Lobby
+          </motion.button>
+        </motion.div>
+      </div>
+    );
+  }
+
   const isYourTurn = gameState.currentTurn === 'you';
   const opponentTotal = gameState.opponentTotal ?? gameState.opponentVisibleCard ?? 0;
-  const yourDanger = Math.min(gameState.yourTotal, 21) / 21;
-  const oppDanger = Math.min(opponentTotal, 21) / 21;
-  const sawOffset = (yourDanger - oppDanger) * 140; // starts center, drifts toward danger
-  const bladeHint = sawOffset > 12 ? 'The blade is drifting to you.' : sawOffset < -12 ? 'The blade favors your foe.' : 'The blade waits.';
+  const sawOffset = calculateSawOffset();
+  const bladeHint = sawOffset > 12 ? 'The blade approaches you.' : sawOffset < -12 ? 'The blade eyes your opponent.' : 'The blade waits in the center.';
 
   const formatCard = (value: number, idx: number) => {
     const suit = SUITS[idx % SUITS.length];
@@ -111,26 +210,49 @@ export default function GameBoard() {
             <div className="text-red-200 font-semibold">{gameState.yourTotal}</div>
           </div>
           <div className="flex items-center gap-2">
-            <div className="text-orange-200 font-semibold">{gameState.opponentTotal ?? '??'}</div>
+            <div className="text-orange-200 font-semibold">{gameState.gamePhase === 'result' || gameState.opponentStanding ? gameState.opponentTotal ?? '??' : '??'}</div>
             <div className="w-10 h-10 rounded-full bg-orange-900/40 border border-orange-700/60 flex items-center justify-center text-white">{(gameState.opponentName || '?').slice(0,2).toUpperCase()}</div>
           </div>
         </div>
         <div className="blade-track rounded-xl mb-2">
           <motion.div
-            className="absolute top-1/2 -translate-y-1/2"
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
             animate={{ x: sawOffset }}
             transition={{ type: 'spring', stiffness: 120, damping: 16 }}
           >
             <motion.div
               animate={{ rotate: 360 }}
               transition={{ repeat: Infinity, duration: 2.5, ease: 'linear' }}
-              className="w-16 h-16 rounded-full bg-gradient-to-br from-red-700 to-red-500 flex items-center justify-center text-2xl saw-shadow saw-spikes"
-            >
-              🪚
-            </motion.div>
+              className="saw-blade"
+            />
           </motion.div>
         </div>
-        <p className="text-center text-gray-400 text-sm">{bladeHint}</p>
+
+        {/* Blade distance and outcome prediction */}
+        <div className="grid grid-cols-3 gap-4 px-2 mb-3">
+          <div className="text-center">
+            <p className="text-xs text-gray-500 mb-1">Distance to You</p>
+            <p className="text-lg font-bold text-red-400">{Math.abs(sawOffset).toFixed(0)}px</p>
+          </div>
+          <div className="text-center">
+            <motion.div
+              animate={{ scale: [1, 1.05, 1] }}
+              transition={{ repeat: Infinity, duration: 2 }}
+              className="text-sm font-bold"
+              style={{
+                color: getBladeOutcome().color
+              }}
+            >
+              {getBladeOutcome().text}
+            </motion.div>
+            <p className="text-xs text-gray-400 mt-1">{getBladeOutcome().desc}</p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs text-gray-500 mb-1">Distance to Opponent</p>
+            <p className="text-lg font-bold text-orange-400">{Math.abs(sawOffset).toFixed(0)}px</p>
+          </div>
+        </div>
+        <p className="text-center text-gray-400 text-sm mt-2">{bladeHint}</p>
 
         {/* Opponent */}
         <div className="grid md:grid-cols-2 gap-6">
@@ -141,20 +263,21 @@ export default function GameBoard() {
                 <h3 className="text-lg font-bold text-white">{gameState.opponentName || 'Unknown steel'}</h3>
               </div>
               <div className="text-right">
-                <div className="text-2xl font-bold text-orange-400">{gameState.opponentTotal ?? '??'}</div>
+                <div className="text-2xl font-bold text-orange-400">{gameState.gamePhase === 'result' || gameState.opponentStanding ? gameState.opponentTotal ?? '??' : '??'}</div>
                 <p className="text-gray-500 text-xs">Total</p>
               </div>
             </div>
             <div className="flex gap-3">
-              <motion.div
-                initial={{ y: -40, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                className="w-20 h-28 card-gloom rounded-lg flex items-center justify-center text-2xl font-bold text-red-200"
-              >
-                {gameState.opponentVisibleCard}
-              </motion.div>
-              <div className="w-20 h-28 card-gloom rounded-lg flex items-center justify-center text-gray-600">
-                ?
+              <div className="playing-card">
+                <div className="card-inner">
+                  <div className="card-value">{gameState.opponentVisibleCard}</div>
+                  <div className="card-suit">{SUITS[0]}</div>
+                </div>
+              </div>
+              <div className="playing-card card-hidden">
+                <div className="card-inner">
+                  <div className="card-back">🔒</div>
+                </div>
               </div>
             </div>
           </div>
@@ -176,16 +299,20 @@ export default function GameBoard() {
               {gameState.yourCards.map((card, idx) => {
                 const formatted = formatCard(card, idx);
                 return (
-                <motion.div
-                  key={idx}
-                  initial={{ y: 30, opacity: 0 }}
-                  animate={{ y: 0, opacity: 1 }}
-                  transition={{ delay: idx * 0.06 }}
-                  className="w-16 h-24 card-gloom rounded-lg flex flex-col items-center justify-center text-white font-bold text-2xl"
-                >
-                  <span>{formatted.label}</span>
-                  <span className={formatted.suit === '♥' || formatted.suit === '♦' ? 'text-red-300 text-sm' : 'text-gray-100 text-sm'}>{formatted.suit}</span>
-                </motion.div>
+                  <motion.div
+                    key={idx}
+                    initial={{ y: 30, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    transition={{ delay: idx * 0.06 }}
+                    className="playing-card"
+                  >
+                    <div className="card-inner">
+                      <div className="card-value">{formatted.label}</div>
+                      <div className={`card-suit ${formatted.suit === '♥' || formatted.suit === '♦' ? 'text-red-500' : 'text-black'}`}>
+                        {formatted.suit}
+                      </div>
+                    </div>
+                  </motion.div>
                 );
               })}
             </div>

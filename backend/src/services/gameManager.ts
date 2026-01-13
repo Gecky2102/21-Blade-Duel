@@ -546,7 +546,7 @@ export class GameManager {
         yourTotal: you.hand.total,
         yourStanding: you.hand.standing,
         opponentVisibleCard: opp.visibleCards[0],
-        opponentTotal: revealTotals ? opp.hand.total : opp.hand.total,
+        opponentTotal: revealTotals ? opp.hand.total : undefined,
         opponentStanding: opp.hand.standing,
         specialCards: you.hand.specialCards.map(c => c.type),
         opponentName: opp.username,
@@ -584,31 +584,103 @@ export class GameManager {
     const current = gameState[currentKey];
     if (current.username !== 'A.I. Sever') return;
 
-    setTimeout(async () => {
-      const state = await redisService.getGameState(matchId);
-      if (!state) return;
-      if (state.currentTurn !== currentKey) return;
+    const delay = setTimeout(async () => {
+      try {
+        const state = await redisService.getGameState(matchId);
+        if (!state) {
+          console.log('Bot: Game state not found');
+          return;
+        }
+        
+        // Double-check this is still the bot's turn
+        if (state[state.currentTurn].username !== 'A.I. Sever') {
+          console.log('Bot: No longer bot turn, skipping');
+          return;
+        }
 
-      const botHand = state[currentKey].hand;
-      const total = botHand.total;
-      let action: 'HIT' | 'STAND';
+        const botPlayerKey = state.player1.username === 'A.I. Sever' ? 'player1' : 'player2';
+        const botHand = state[botPlayerKey].hand;
+        const total = botHand.total;
+        
+        let action: 'HIT' | 'STAND';
 
-      if (total <= 16) {
-        action = 'HIT';
-      } else if (total <= 18) {
-        const oppVisible = state[currentKey === 'player1' ? 'player2' : 'player1'].visibleCards[0] || 0;
-        action = oppVisible >= 9 ? 'HIT' : 'STAND';
-      } else {
-        action = 'STAND';
+        if (total <= 16) {
+          action = 'HIT';
+        } else if (total <= 18) {
+          const oppKey = botPlayerKey === 'player1' ? 'player2' : 'player1';
+          const oppVisible = state[oppKey].visibleCards[0] || 0;
+          action = oppVisible >= 9 ? 'HIT' : 'STAND';
+        } else {
+          action = 'STAND';
+        }
+
+        console.log(`Bot action: ${action}, total: ${total}`);
+
+        // Create minimal fake socket for bot
+        const fakeSocket: any = {
+          emit: () => {},
+          handshake: { auth: { token: '' } }
+        };
+
+        // Directly invoke game action handling
+        const isPlayer1 = state.player1.id === state[botPlayerKey].id;
+        const playerKey = isPlayer1 ? 'player1' : 'player2';
+        const player = state[playerKey];
+        const opponent = playerKey === 'player1' ? state.player2 : state.player1;
+
+        if (action === 'HIT') {
+          GameEngine.drawNumberCard(player.hand);
+          
+          await queries.logAction(
+            matchId,
+            state.turnCount,
+            state[botPlayerKey].id,
+            'HIT',
+            player.hand.numberCards[player.hand.numberCards.length - 1],
+            player.hand.total
+          );
+
+          if (GameEngine.checkBust(player.hand.total, player.hand.maxAllowed, player.hand.hasUsedLastBreath)) {
+            await this.endMatch(state, isPlayer1 ? 'player2' : 'player1', matchId);
+            return;
+          }
+        } else if (action === 'STAND') {
+          player.hand.standing = true;
+
+          await queries.logAction(matchId, state.turnCount, state[botPlayerKey].id, 'STAND', undefined, player.hand.total);
+
+          if (opponent.hand.standing) {
+            const comparison = GameEngine.compareHands(
+              player.hand.total,
+              opponent.hand.total,
+              player.hand.numberCards.length,
+              opponent.hand.numberCards.length
+            );
+
+            let winnerKey: 'player1' | 'player2';
+            if (comparison === 'tie') {
+              winnerKey = Math.random() > 0.5 ? 'player1' : 'player2';
+            } else {
+              winnerKey = comparison;
+            }
+
+            await this.endMatch(state, winnerKey, matchId);
+            return;
+          }
+        }
+
+        // Switch turn and grant next special card
+        state.currentTurn = playerKey === 'player1' ? 'player2' : 'player1';
+        state.turnCount++;
+        const nextPlayer = state[state.currentTurn];
+        GameEngine.grantSpecialCard(nextPlayer.hand);
+
+        await this.scheduleTurnTimer(state, matchId);
+        await this.emitStateToPlayers(state, matchId, true);
+        await this.maybeHandleBotTurn(state, matchId);
+      } catch (error) {
+        console.error('Bot turn error:', error);
       }
-
-      const socketId = this.playerSockets.get(state[currentKey].id);
-      const fakeSocket: any = { emit: () => {}, id: socketId };
-      await this.handleGameAction(fakeSocket as Socket, {
-        matchId,
-        token: '',
-        action
-      } as any);
     }, 800);
   }
 }
